@@ -263,6 +263,39 @@ def wolff_simulation(L, T, n_steps, equilibration_steps=None):
 
 
 # Part 4: Analysis Tools
+
+def autocorrelation_time(data, max_lag=None):
+    """
+    Calculate integrated autocorrelation time.
+    
+    This tells us how many MC steps correspond to one independent sample.
+    """
+    if max_lag is None:
+        max_lag = min(len(data) // 4, 250)
+    
+    data = np.array(data)
+    mean = np.mean(data)
+    var = np.var(data)
+    
+    if var == 0:
+        return 1.0
+    
+    # Calculate autocorrelation function
+    tau = 0.0
+    for k in range(1, max_lag):
+        # Autocorrelation at lag k
+        acf = np.mean((data[:-k] - mean) * (data[k:] - mean)) / var
+        
+        if acf < 0.05:  # Stop when correlation becomes negligible
+            break
+            
+        tau += acf
+    
+    return 1 + 2 * tau
+
+
+
+
 def calculate_observables(magnetization, energy, T, L):
     """
     Calculate thermodynamic observables with error estimates.
@@ -429,5 +462,187 @@ if __name__ == "__main__":
     plt.title("Susceptibility vs Temperature")
     plt.legend()
 
+    plt.tight_layout()
+    plt.show()
+
+
+# ============================================================================
+# Part 6: Convergence Diagnostics
+# ============================================================================
+
+def gelman_rubin_diagnostic(chains):
+    """
+    Calculate Gelman-Rubin R-hat statistic for convergence.
+    
+    Parameters:
+    -----------
+    chains : list of arrays
+        Multiple independent MCMC chains
+    
+    Returns:
+    --------
+    float : R-hat value (should be < 1.1 for convergence)
+    """
+    m = len(chains)  # Number of chains
+    n = len(chains[0])  # Length of each chain
+    
+    # Calculate within-chain variance
+    W = np.mean([np.var(chain, ddof=1) for chain in chains])
+    
+    # Calculate between-chain variance
+    chain_means = [np.mean(chain) for chain in chains]
+    B = n * np.var(chain_means, ddof=1)
+    
+    # Calculate R-hat
+    var_plus = ((n-1)/n) * W + (1/n) * B
+    R_hat = np.sqrt(var_plus / W) if W > 0 else 1.0
+    
+    return R_hat
+
+def check_convergence(L, T, n_chains=4, n_steps=2500):
+    """
+    Run multiple chains to check convergence.
+    """
+    print(f"\nConvergence check at T={T:.3f} with {n_chains} chains")
+    print("-"*40)
+    
+    chains = []
+    for i in range(n_chains):
+        print(f"Running chain {i+1}/{n_chains}...")
+        data = metropolis_simulation(L, T, n_steps, n_steps//2)
+        chains.append(data['magnetization'])
+    
+    R_hat = gelman_rubin_diagnostic(chains)
+    
+    print(f"\nGelman-Rubin R-hat = {R_hat:.4f}")
+    print(f"Status: {'CONVERGED' if R_hat < 1.1 else 'NOT CONVERGED'} (threshold: R-hat < 1.1)")
+    
+    return chains, R_hat
+
+# ============================================================================
+# Part 7: Visualization
+# ============================================================================
+
+def plot_phase_transition(temps, results_metro, results_wolff):
+    """
+    Create comprehensive plots showing the phase transition.
+    """
+    Tc = 2.269185
+    
+    # Extract data
+    m_metro = [r['magnetization'] for r in results_metro]
+    m_wolff = [r['magnetization'] for r in results_wolff]
+    chi_metro = [r['susceptibility'] for r in results_metro]
+    C_metro = [r['specific_heat'] for r in results_metro]
+    tau_metro = [r['tau_magnetization'] for r in results_metro]
+    tau_wolff = [r['tau_magnetization'] for r in results_wolff]
+    
+    # Exact solution
+    T_exact = np.linspace(1.5, Tc, 100)
+    m_exact = [exact_magnetization_onsager(T) for T in T_exact]
+    
+    # Create figure
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # Magnetization
+    ax = axes[0, 0]
+    ax.plot(temps, m_metro, 'bo-', label='Metropolis', markersize=4)
+    ax.plot(temps, m_wolff, 'rs-', label='Wolff', markersize=4, alpha=0.7)
+    ax.plot(T_exact, m_exact, 'g--', label='Onsager exact', linewidth=2)
+    ax.axvline(Tc, color='k', linestyle=':', alpha=0.5)
+    ax.set_xlabel('Temperature')
+    ax.set_ylabel('|m|')
+    ax.set_title('Magnetization per spin')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Energy
+    ax = axes[0, 1]
+    e_metro = [r['energy'] for r in results_metro]
+    ax.plot(temps, e_metro, 'go-', markersize=4)
+    ax.axvline(Tc, color='k', linestyle=':', alpha=0.5)
+    ax.set_xlabel('Temperature')
+    ax.set_ylabel('E/N')
+    ax.set_title('Energy per spin')
+    ax.grid(True, alpha=0.3)
+    
+    # Susceptibility
+    ax = axes[0, 2]
+    ax.plot(temps, chi_metro, 'mo-', markersize=4)
+    ax.axvline(Tc, color='k', linestyle=':', alpha=0.5)
+    ax.set_xlabel('Temperature')
+    ax.set_ylabel('χ')
+    ax.set_title('Magnetic Susceptibility')
+    ax.grid(True, alpha=0.3)
+    
+    # Specific heat
+    ax = axes[1, 0]
+    ax.plot(temps, C_metro, 'co-', markersize=4)
+    ax.axvline(Tc, color='k', linestyle=':', alpha=0.5)
+    ax.set_xlabel('Temperature')
+    ax.set_ylabel('C')
+    ax.set_title('Specific Heat')
+    ax.grid(True, alpha=0.3)
+    
+    # Autocorrelation time
+    ax = axes[1, 1]
+    ax.semilogy(temps, tau_metro, 'bo-', label='Metropolis', markersize=4)
+    ax.semilogy(temps, tau_wolff, 'rs-', label='Wolff', markersize=4)
+    ax.axvline(Tc, color='k', linestyle=':', alpha=0.5)
+    ax.set_xlabel('Temperature')
+    ax.set_ylabel('τ (log scale)')
+    ax.set_title('Autocorrelation Time')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Speedup factor
+    ax = axes[1, 2]
+    speedup = np.array(tau_metro) / np.array(tau_wolff)
+    ax.plot(temps, speedup, 'ko-', markersize=4)
+    ax.axvline(Tc, color='k', linestyle=':', alpha=0.5)
+    ax.set_xlabel('Temperature')
+    ax.set_ylabel('Speedup')
+    ax.set_title('Wolff Speedup (τ_Metro / τ_Wolff)')
+    ax.grid(True, alpha=0.3)
+    
+    plt.suptitle('2D Ising Model Phase Transition', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.show()
+
+def plot_configurations(L, temps_to_plot=[1.5, 2.269, 3.0]):
+    """
+    Show spin configurations at different temperatures.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    
+    for idx, T in enumerate(temps_to_plot):
+        # Run simulation - INCREASED BY 25%
+        if T == 2.269:
+            n_steps = 2500
+        else:
+            n_steps = 1250
+            
+        data = metropolis_simulation(L, T, n_steps, n_steps//2)
+        config = data['final_config']
+        
+        # Plot
+        ax = axes[idx]
+        im = ax.imshow(config, cmap='RdBu', vmin=-1, vmax=1)
+        ax.set_title(f'T = {T:.3f}')
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        
+        if idx == 0:
+            ax.text(0.5, -0.15, 'Ordered\n(T < Tc)', 
+                   transform=ax.transAxes, ha='center')
+        elif idx == 1:
+            ax.text(0.5, -0.15, 'Critical\n(T = Tc)', 
+                   transform=ax.transAxes, ha='center')
+        else:
+            ax.text(0.5, -0.15, 'Disordered\n(T > Tc)', 
+                   transform=ax.transAxes, ha='center')
+    
+    plt.suptitle(f'Spin Configurations ({L}×{L} lattice)', fontsize=14, fontweight='bold')
+    fig.colorbar(im, ax=axes.ravel().tolist(), label='Spin', ticks=[-1, 0, 1])
     plt.tight_layout()
     plt.show()
